@@ -1,0 +1,27 @@
+{
+  "name": "pailingual-odata-model-generator",
+  "version": "1.0.0-alpha.1",
+  "description": "pailingual-odata-model-generator",
+  "main": "src/cli.js",
+  "author": {
+    "name": "Gennady Pundikov"
+  },
+  "bin": {
+    "pailingual-odata-model-generator": "src/cli.js"
+  },
+  "files": [
+    "src/*"
+  ],
+  "devDependencies": {
+    "@types/node": "^8.0.14"
+  },
+  "dependencies": {
+    "@types/commander": "2.12.2",
+    "commander": "2.12.2",
+    "jsdom": "^14.0.0",
+    "jsdom-global": "^3.0.2",
+    "node-fetch": "^2.3.0",
+    "pailingual-odata": "^1.0.0-rc.2",
+    "typescript": "^3.3.4000"
+  }
+}

@@ -1,0 +1,27 @@
+# User-specific files
+*.user
+*.js
+*.map
+
+test_data/
+
+
+# Build results
+[Dd]ebug/
+[Bb]in/
+[Oo]bj/
+
+# Visual Studio 2015/2017 cache/options directory
+.vs/
+# NuGet Packages
+# The packages folder can be ignored because of Package Restore
+# except build/, which is used as an MSBuild target.
+!**/[Pp]ackages/build/
+# Visual Studio cache files
+# files ending in .cache can be ignored
+*.[Cc]ache
+# but keep track of directories ending in .cache
+!?*.[Cc]ache/
+
+# Node.js Tools for Visual Studio
+node_modules/

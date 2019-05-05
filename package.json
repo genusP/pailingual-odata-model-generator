@@ -21,7 +21,7 @@
     "jsdom": "^14.0.0",
     "jsdom-global": "^3.0.2",
     "node-fetch": "^2.3.0",
-    "pailingual-odata": "^1.0.0-rc.2",
+    "pailingual-odata": "^1.0.0-rc.3",
     "typescript": "^3.3.4000"
   }
 }

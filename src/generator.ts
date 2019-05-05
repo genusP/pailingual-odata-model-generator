@@ -1,10 +1,7 @@
 import * as ts from "typescript";
-import { ApiMetadata, EdmEnumType, EdmEntityType, EdmTypeReference, EdmTypes, EdmComplexType, OperationMetadata } from "pailingual-odata/src/metadata";
-import { EdmEntityTypeReference } from "pailingual-odata/dist/esm/metadata";
-import { fail } from "assert";
+import * as cm from "./codeModel";
+import { ApiMetadata, EdmEnumType, EdmEntityType, EdmTypeReference, EdmComplexType, OperationMetadata } from "pailingual-odata/src/metadata";
 
-const ENTITY_BASE_TYPE = "IEntityBase";
-const COMPLEX_BASE_TYPE = "IComplexBase";
 const API_CONTEXT_BASE_TYPE = "IApiContextBase";
 
 export type GeneratorOptions = {
@@ -13,60 +10,42 @@ export type GeneratorOptions = {
     exclude?: (string | RegExp)[],
     apiContextName?: string,
     apiContextBase?: string,
-    afterBuildModel?: (nodes: ts.Node[]) => void
+    afterBuildModel?: (model: cm.Model) => void
 }
 
 export function generate(metadata: ApiMetadata, options: GeneratorOptions = {}) {
-    const nodes: ts.Node[] = [];
+    //  const nodes: ts.Node[] = [];
+    const model = new cm.Model();
+    model.imports.push("import { ApiContext, IApiContextBase, IComplexBase, IEntityBase } from \"pailingual-odata\"");
+    if (options.imports && options.imports.length > 0)
+        model.imports.push(...options.imports);
 
-    var imports = ["import { ApiContext, IApiContextBase, IComplexBase, IEntityBase } from \"pailingual-odata\""];
+    model.contextDeclaration = generateApiContext(model, metadata, options);
 
-    if (options.imports)
-        imports.push(...options.imports);
-
-    nodes.push(
-        ...ts.createSourceFile("imports.ts", imports.join(";"), ts.ScriptTarget.Latest).getChildren()[0].getChildren()
-    );
-
-    let apiContextNode = generateApiContext(metadata, options);
-    nodes.push(...apiContextNode);
-
-    for (const ns of Object.keys(metadata.namespaces)) {
-        var nsData = metadata.namespaces[ns];
-        for (const typeName of Object.keys(nsData.types)) {
-            var typeMetadata = nsData.types[typeName];
-            if (isIncludeObject(typeMetadata, options)) {
-                if (typeMetadata instanceof EdmEnumType)
-                    nodes.push(generateEnumType(typeMetadata, metadata, options));
-                else
-                    nodes.push(...generateEntityType(typeMetadata, metadata, options));
-            }
-        }
-    }
+    generateOperations(model, metadata, options);
 
     if (options.afterBuildModel)
-        options.afterBuildModel(nodes);
-   
-    const resultFile = ts.createSourceFile(
-        "someFileName.ts",
-        "",
-        ts.ScriptTarget.Latest,
-  /*setParentNodes*/ false,
-        ts.ScriptKind.TS
-    );
+        options.afterBuildModel(model);
 
+    const nodes = model.toNodeArray();
+   
+    const resultFile = ts.createSourceFile("", "", ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
 
     var printer = ts.createPrinter({});
-    var code = printer.printList(ts.ListFormat.MultiLine, ts.createNodeArray(nodes), resultFile);
-    return code
+    var code = printer.printList(ts.ListFormat.MultiLine, nodes, resultFile);
+    return code;
 }
 
-function isIncludeObject(edmObj: EdmEntityType | EdmComplexType | EdmEnumType | OperationMetadata, options: GeneratorOptions) {
-    const objFullName = edmObj.getFullName();
+function isIncludeObject(edmObj: EdmEntityType | EdmComplexType | EdmEnumType | OperationMetadata | string, options: GeneratorOptions) {
+    const objFullName = typeof edmObj === "string" ? edmObj : edmObj.getFullName();
     return !(
         (options.include && !options.include.some(p => isMatch(objFullName, p)))
-        || (options.exclude && options.exclude.some(p => isMatch(objFullName, p)))
+        || isExclude(objFullName, options)
     );
+}
+
+function isExclude(path: string, options: GeneratorOptions) {
+    return options.exclude && options.exclude.some(p => isMatch(path, p));
 }
 
 function isMatch(value: string, pattern: string | RegExp): boolean {
@@ -74,246 +53,143 @@ function isMatch(value: string, pattern: string | RegExp): boolean {
     return value.match(pattern2)!= null;
 }
 
-const exportModifier = ts.createModifier(ts.SyntaxKind.ExportKeyword);
-function generateEntityType(edmEntityType: EdmEntityType, metadata: ApiMetadata, options: GeneratorOptions): ts.Node[] {
-    const res = [null];
-    const entityName = edmEntityType.name;
-    var properties: ts.PropertyDeclaration[] = []
-    for (const propName of Object.keys(edmEntityType.properties)) {
-        const typeReference = edmEntityType.properties[propName];
-        const propType: ts.TypeNode = getType(typeReference)
-        properties.push(
-            ts.createProperty(
-                undefined,
-                undefined,
-                propName,
-                typeReference.nullable ? ts.createToken(ts.SyntaxKind.QuestionToken) : undefined,
-                propType,
-                undefined
-            )
-        )
-    }
+function initEntityType(edmEntityType: EdmEntityType, declaration:cm.InterfaceDeclaration, metadata: ApiMetadata, model: cm.Model, options: GeneratorOptions): cm.InterfaceDeclaration {
 
-    for (const propName of Object.keys(edmEntityType.navProperties)) {
-        const edmTypeRef = edmEntityType.navProperties[propName];
-        if (isIncludeObject(edmTypeRef.type, options)) {
-            const propType = getType(edmTypeRef);
-            properties.push(
-                ts.createProperty(
-                    undefined,
-                    undefined,
-                    propName,
-                    ts.createToken(ts.SyntaxKind.QuestionToken),
-                    propType,
-                    undefined
-                )
-            )
-        }
-    }
-
-    const esOperations = generateOperationInterfaces(metadata, entityName + "EntitySet", { type: edmEntityType, collection: true, nullable: false }, options);
-    const entityOperations = generateOperationInterfaces(metadata, entityName, { type: edmEntityType, collection: false, nullable: false }, options);
-
-    if (esOperations.actionsDeclaration) {
-        res.push(esOperations.actionsDeclaration);
-        properties.push(ts.createProperty(undefined, undefined, "$$EntitySetActions", undefined, ts.createTypeReferenceNode(esOperations.actionsDeclaration.name, undefined), undefined));
-    }
-    if (esOperations.functionsDeclaration) {
-        res.push(esOperations.functionsDeclaration);
-        properties.push(ts.createProperty(undefined, undefined, "$$EntitySetFunctions", undefined, ts.createTypeReferenceNode(esOperations.functionsDeclaration.name, undefined), undefined));
-    }
-    if (entityOperations.actionsDeclaration) {
-        res.push(entityOperations.actionsDeclaration);
-        properties.push(ts.createProperty(undefined, undefined, "$$Actions", undefined, ts.createTypeReferenceNode(entityOperations.actionsDeclaration.name, undefined), undefined));
-    }
-    if (entityOperations.functionsDeclaration) {
-        res.push(entityOperations.functionsDeclaration);
-        properties.push(ts.createProperty(undefined, undefined, "$$Functions", undefined, ts.createTypeReferenceNode(entityOperations.functionsDeclaration.name, undefined), undefined));
-    }
-
-    var baseClassIdentifier = getBaseClassIdentifier(edmEntityType)
-    var baseClass = ts.createHeritageClause(ts.SyntaxKind.ExtendsKeyword, [ts.createExpressionWithTypeArguments(undefined, baseClassIdentifier)]);
-
-    res[0] = ts.createInterfaceDeclaration(null, [exportModifier], entityName, null, [baseClass], properties as any);
-    return res;
-}
-
-function getBaseClassIdentifier(edmEntityType: EdmEntityType) {
-    if (edmEntityType.baseType)
-        return ts.createIdentifier(edmEntityType.baseType.name);
-    return ts.createIdentifier(edmEntityType instanceof EdmComplexType
-        ? COMPLEX_BASE_TYPE
-        : ENTITY_BASE_TYPE);
-}
-
-const edmTypeMap = {
-    [EdmTypes.Boolean]: ts.createTypeReferenceNode("boolean", undefined),
-    [EdmTypes.Date]: ts.createTypeReferenceNode("Date", undefined),
-    [EdmTypes.DateTimeOffset]: ts.createTypeReferenceNode("Date", undefined),
-    [EdmTypes.Decimal]: ts.createTypeReferenceNode("number", undefined),
-    [EdmTypes.Double]: ts.createTypeReferenceNode("number", undefined),
-    [EdmTypes.Guid]: ts.createTypeReferenceNode("string", undefined),
-    [EdmTypes.Int16]: ts.createTypeReferenceNode("number", undefined),
-    [EdmTypes.Int32]: ts.createTypeReferenceNode("number", undefined),
-    [EdmTypes.Single]: ts.createTypeReferenceNode("boolean", undefined),
-    [EdmTypes.String]: ts.createTypeReferenceNode("string", undefined),
-    [EdmTypes.TimeOfDay]: ts.createTypeReferenceNode("Date", undefined)
-}
-
-function getType(typeReference: EdmTypeReference): ts.TypeNode {
-    var t = typeReference.type instanceof EdmEnumType ? ts.createTypeReferenceNode(typeReference.type.name, undefined) :
-            typeReference.type instanceof EdmEntityType ? ts.createTypeReferenceNode(typeReference.type.name, undefined) :
-            edmTypeMap[typeReference.type as EdmTypes];
-    if (typeReference.collection)
-        t = ts.createArrayTypeNode(t);
-    return t;
-}
-
-function generateEnumType(edmEnumType: EdmEnumType, metadata: ApiMetadata, options: GeneratorOptions): ts.Node
-{
-    const members = [];
-    for (const memberName of Object.keys(edmEnumType.members)) {
-        members.push(
-            ts.createEnumMember(memberName, ts.createLiteral(edmEnumType.members[memberName]))
-        )
-    }
-    return ts.createEnumDeclaration(undefined, [exportModifier], edmEnumType.name, members);
-}
-
-function generateApiContext(metadata: ApiMetadata, options: GeneratorOptions): ts.DeclarationStatement[]
-{
-    const res: ts.DeclarationStatement[] = [];
-    const apiContextName = options.apiContextName || "OdataApiContext";
-    const apiContextInterfaceName = "I" + apiContextName;
-
-    res.push(
-        ts.createTypeAliasDeclaration(
-            undefined,
-            [exportModifier],
-            apiContextName,
-            undefined,
-            ts.createTypeReferenceNode("ApiContext", [ts.createTypeReferenceNode(apiContextInterfaceName, undefined)]))
-    );
-
-
-    var props: ts.PropertyDeclaration[] = [];
-    for (let esName of Object.keys(metadata.entitySets)) {
-        const esMetadata = metadata.entitySets[esName];
-        if (isIncludeObject(esMetadata, options)) {
-            let propType = ts.createArrayTypeNode(
-                ts.createTypeReferenceNode(esMetadata.name, undefined));
-            let prop = ts.createProperty(undefined, undefined, esName, undefined, propType, undefined);
-            props.push(prop as any)
-        }
-    }
-
-    for (let sName of Object.keys(metadata.singletons)) {
-        const sMetadata = metadata.singletons[sName];
-        if (isIncludeObject(sMetadata, options)) {
-            let propType = ts.createTypeReferenceNode(sMetadata.name, undefined);
-            let prop = ts.createProperty(undefined, undefined, sName, undefined, propType, undefined);
-            props.push(prop);
-        }
-    }
-
-    const operations = generateOperationInterfaces(metadata, apiContextName, undefined, options);
-    if (operations.actionsDeclaration) {
-        res.push(operations.actionsDeclaration);
-        props.push(ts.createProperty(undefined, undefined, "$$Actions", undefined, ts.createTypeReferenceNode(operations.actionsDeclaration.name, undefined), undefined));
-    }
-    if (operations.functionsDeclaration) {
-        res.push(operations.functionsDeclaration);
-        props.push(ts.createProperty(undefined, undefined, "$$Functions", undefined, ts.createTypeReferenceNode(operations.functionsDeclaration.name, undefined), undefined));
-    }
-
-    let baseClass = options.apiContextBase || API_CONTEXT_BASE_TYPE;
-    let baseClassNode = ts.createHeritageClause(ts.SyntaxKind.ExtendsKeyword, [ts.createExpressionWithTypeArguments(undefined, ts.createIdentifier(baseClass))]);
-    res.splice(1, 0,
-        ts.createInterfaceDeclaration(
-            undefined,
-            [exportModifier],
-            apiContextInterfaceName,
-            undefined,
-            [baseClassNode],
-            props as any
-        )
-    );
-
-    return res;
-}
-
-function generateOperations(name: string, operations: OperationMetadata[], options: GeneratorOptions): ts.InterfaceDeclaration {
-    let funcs = [];
-    for (const operation of operations) {
-        let retType: ts.TypeNode = operation.returnType
-            ? getType(operation.returnType)
-            : ts.createTypeReferenceNode("void", undefined);
-        const parameters = getParameterDeclarations(operation, options);
-        const funcDeclaration = ts.createMethod(
-            undefined,
-            undefined,
-            undefined,
-            operation.name,
-            undefined,
-            undefined,
-            parameters,
-            retType,
-            undefined
-        );
-        funcs.push(funcDeclaration);
-    }
-    return ts.createInterfaceDeclaration(
-        undefined,
-        [exportModifier],
-        name,
-        undefined,
-        undefined,
-        funcs
-    );
-}
-
-function generateOperationInterfaces(metadata: ApiMetadata, interfaceNamePrefix: string, bindingTo: EdmEntityTypeReference| undefined, options: GeneratorOptions) {
-    const actions: OperationMetadata[] = [],
-          functions: OperationMetadata[] = [];
-    for (const ns of Object.keys(metadata.namespaces)) {
-        for (const md of metadata.namespaces[ns].operations)
-            if (isIncludeObject(md, options)
-                && (md.bindingTo == bindingTo
-                || (bindingTo && md.bindingTo && md.bindingTo.type == bindingTo.type && md.bindingTo.collection == bindingTo.collection))
-            ) {
-                if (md.isAction)
-                    actions.push(md);
-                else
-                    functions.push(md)
+    const internalAddProps = function (props: Record<string, EdmTypeReference>) {
+        for (const propName of Object.keys(props)) {
+            const propPath = [edmEntityType.getFullName(), propName].join(".");
+            if (isIncludeObject(propPath, options)) {
+                const edmTypeReference = props[propName];
+                const typeReference = getTypeReference(edmTypeReference, metadata, model, options);
+                if (typeReference) {
+                    if (props === edmEntityType.navProperties)
+                        declaration.addNavProperty(propName, typeReference);
+                    else
+                        declaration.addProperty(propName, typeReference, edmTypeReference.nullable);
+                }
             }
+        }
     }
 
-    let actionsDeclaration: ts.InterfaceDeclaration,
-        functionsDeclaration: ts.InterfaceDeclaration;
-    if (actions.length > 0) 
-        actionsDeclaration = generateOperations("_"+interfaceNamePrefix + "Actions", actions, options);
+    edmEntityType.properties && internalAddProps(edmEntityType.properties);
+    edmEntityType.navProperties && internalAddProps(edmEntityType.navProperties);
 
-    if (functions.length > 0) 
-        functionsDeclaration = generateOperations("_"+interfaceNamePrefix + "Functions", functions, options);
+    declaration.comment = edmEntityType.getFullName();
 
-    return { actionsDeclaration, functionsDeclaration };
+    return declaration;
 }
 
-function getParameterDeclarations(operation: OperationMetadata, options:GeneratorOptions): ts.ParameterDeclaration[]{
-    const res: ts.ParameterDeclaration[] = [];
-    for (const paramMd of operation.parameters || []) {
-        const name = paramMd.name;
-        const type = getType(paramMd.type)
-        const paramDeclaration = ts.createParameter(
-            undefined,
-            undefined,
-            undefined,
-            name,
-            undefined,
-            type,
-            undefined
-        );
-        res.push(paramDeclaration);
+function initEnumType(edmEnumType: EdmEnumType, declaration: cm.EnumDeclaration, options: GeneratorOptions)
+{
+    for (const memberName of Object.keys(edmEnumType.members))
+        declaration.addMember(memberName, edmEnumType.members[memberName]);
+    declaration.comment = edmEnumType.getFullName();
+}
+
+function generateApiContext(model: cm.Model, metadata: ApiMetadata, options: GeneratorOptions): cm.InterfaceDeclaration {
+    let baseClass = options.apiContextBase || API_CONTEXT_BASE_TYPE;
+    let apiContextName = options.apiContextName || (metadata.containerName||"Odata")+"Context"
+    const d = new cm.InterfaceDeclaration(apiContextName, baseClass);
+
+    let props = Object.keys(metadata.entitySets)
+        .map(name => { return { name, meta: metadata.entitySets[name] } });
+
+    for (let p of props) {
+        const propPath = [metadata.containerName, p.name].filter(_ => _).join(".");
+        let typeRef = getTypeReference(new EdmTypeReference(p.meta, false, true), metadata, model, options);
+        if (typeRef &&(
+            isIncludeObject(propPath, options)
+            || (typeof typeRef.type === "object" && !isExclude(propPath, options))
+            )
+        ) 
+            d.addNavProperty(p.name, typeRef)
+                .comment = propPath;
+    }    
+
+    return d;
+}
+
+function getTypeReference(edmRef: EdmTypeReference, metadata: ApiMetadata, model: cm.Model, options: GeneratorOptions) {
+    if (typeof edmRef.type == "string")
+        return new cm.TypeReference(edmRef.type, edmRef.collection);
+    var resType =
+        !isIncludeObject(edmRef.type, options) ? edmRef.type.name :
+            edmRef.type instanceof EdmEntityType
+                ? model.getOrAddType(edmRef.type, (t, et) => initEntityType(t, et, metadata, model, options)) :
+            edmRef.type instanceof EdmEnumType
+                ? model.getOrAddType(edmRef.type, (t, ed) => initEnumType(t, ed, options)) :
+            undefined;
+    if (resType)
+        return new cm.TypeReference(resType, edmRef.collection);
+}
+
+function generateOperations(model: cm.Model, metadata: ApiMetadata, options: GeneratorOptions) {
+    for (let ns of Object.keys(metadata.namespaces))
+        for (let operation of metadata.namespaces[ns].operations) {
+            if (isIncludeObject(operation, options))
+                generateOperation(operation, model, metadata, options);
+        }
+}
+
+function generateOperation(operation: OperationMetadata, model: cm.Model, metadata: ApiMetadata, options: GeneratorOptions) {
+    let isSetBinded = false;
+    let bindToModel: cm.InterfaceDeclaration;
+    if (operation.bindingTo) {
+        if (!isIncludeObject(operation.bindingTo.type, options))
+            return;
+        isSetBinded = operation.bindingTo.collection == true;
+        bindToModel = model.getOrAddType(operation.bindingTo.type, (t, id) => initEntityType(t, id, metadata, model, options));
     }
-    return res;
+    else
+        bindToModel = model.contextDeclaration;
+    if (bindToModel) {
+        if (!bindToModel.operationsRef)
+            bindToModel.operationsRef = new cm.OperationsRefDeclaration();
+
+        let operTypeRef: cm.TypeReference;
+        if (isSetBinded) {
+            if (operation.isAction) 
+                operTypeRef = getOperTypeRef(bindToModel.operationsRef.entitysetActions, tr => bindToModel.operationsRef.entitysetActions = tr, operation, model);
+            else
+                operTypeRef = getOperTypeRef(bindToModel.operationsRef.entitysetFunctions, tr => bindToModel.operationsRef.entitysetFunctions = tr, operation, model);
+        }
+        else {
+            if (operation.isAction)
+                operTypeRef = getOperTypeRef(bindToModel.operationsRef.actions, tr => bindToModel.operationsRef.actions = tr, operation, model);
+            else
+                operTypeRef = getOperTypeRef(bindToModel.operationsRef.functions, tr => bindToModel.operationsRef.functions = tr, operation, model);
+        }
+
+        let interfaceDec = operTypeRef.type as cm.OperationsInterfaceDeclaration;
+        let returnType = operation.returnType && getTypeReference(operation.returnType, metadata, model, options);
+        let params = (operation.parameters || [])
+            .map(p =>
+                new cm.MethodParameter(
+                    p.name,
+                    getTypeReference(p.type, metadata, model, options),
+                    p.type.nullable
+                )
+            );
+        const methodDeclaration = new cm.MethodDeclaration(operation.name, returnType, params, operation.getFullName());
+
+        interfaceDec.methods.push(methodDeclaration);
+    }
+}
+
+function getOperTypeRef(operTypeRef: cm.TypeReference | undefined, setter: (tr: cm.TypeReference) => void, operation: OperationMetadata, model: cm.Model): cm.TypeReference {
+    if (!operTypeRef) {
+        const bindtoTypeName = (operation.bindingTo && operation.bindingTo.type.name) || model.contextDeclaration.name;
+        const prefix = operation.bindingTo && operation.bindingTo.collection ? "EntitySet" : "";
+        const sufix = operation.isAction ? "Actions" : "Functions";
+        operTypeRef = new cm.TypeReference(
+            new cm.OperationsInterfaceDeclaration(
+                "_" + bindtoTypeName + prefix + sufix,
+                true //export
+            )
+        )
+        setter(operTypeRef);
+        model.addType(operTypeRef.type as cm.InterfaceDeclaration);
+    }
+    return operTypeRef;
+
 }

@@ -20,6 +20,7 @@ class CLI extends commander.Command {
     contextName: string;
     contextBase: string;
     afterBuild: string;
+    verbose: boolean;
 }
 
 var urlOrPath: string = null;
@@ -32,6 +33,7 @@ const cli = commander.version("1.0.0.0")
     .option("--context-name <name>")
     .option("--context-base <name>")
     .option("--after-build <script_file>", "Script for run after build model")
+    .option("-v --verbose", "Verbose information on errors")
     .arguments("<url_or_path>")
     .arguments("<out_file>")
     .action((a1, a2) => { urlOrPath = a1; outFile = a2 })
@@ -52,10 +54,13 @@ if (cli.afterBuild && !fs.existsSync(cli.afterBuild))
 loadMetadata()
     .then(generateModel)
     .then(() => console.log("Model builded!"))
+    .catch(e => error(e, 100))
     ;
 
-function error(message: string, exitCode?: number) {
-    console.error(`\r\n\terror: ${message}\r\n`);
+function error(error: string | Error, exitCode?: number) {
+    console.error(`\r\n\terror: ${error}\r\n`);
+    if (error instanceof Error && cli.verbose)
+        console.log(error.stack);
     if (exitCode != undefined)
         process.exit(exitCode);
 }
@@ -106,7 +111,7 @@ function generateModel(metadata: ApiMetadata) {
     });
 }
 
-function afterBuild(nodes) {
+function afterBuild(model) {
     const module = require(
         path.resolve(cli.afterBuild));
     const func =
@@ -115,7 +120,7 @@ function afterBuild(nodes) {
         (module.afterBuildModel && typeof module.afterBuildModel == "function") ? module.AfterBuildModel :
                     undefined;
     if (func)
-        func(nodes)
+        func(model)
     else
         error(`Function for afterBuildModel event not found in module: ${cli.afterBuild} `);
 }

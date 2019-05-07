@@ -5,7 +5,7 @@
     <Name>pailingual-odata-model-generator</Name>
     <RootNamespace>pailingual-odata-model-generator</RootNamespace>
     <SaveNodeJsSettingsInProjectFile>True</SaveNodeJsSettingsInProjectFile>
-    <ScriptArguments>.\test_data\metadata.xml  .\test_data\model.ts -f -----after-build ./test_data/afterBuild.js</ScriptArguments>
+    <ScriptArguments>.\test_data\metadata.xml  .\test_data\model.ts -f</ScriptArguments>
   </PropertyGroup>
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>

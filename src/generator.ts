@@ -10,10 +10,10 @@ export type GeneratorOptions = {
     exclude?: (string | RegExp)[],
     apiContextName?: string,
     apiContextBase?: string,
-    afterBuildModel?: (model: cm.Model) => void
+    afterBuildModel?: (model: cm.Model, metadata?: ApiMetadata) => Promise<void>
 }
 
-export function generate(metadata: ApiMetadata, options: GeneratorOptions = {}) {
+export async function generate(metadata: ApiMetadata, options: GeneratorOptions = {}) {
     //  const nodes: ts.Node[] = [];
     const model = new cm.Model();
     model.imports.push("import { ApiContext, IApiContextBase, IComplexBase, IEntityBase } from \"pailingual-odata\"");
@@ -24,8 +24,11 @@ export function generate(metadata: ApiMetadata, options: GeneratorOptions = {}) 
 
     generateOperations(model, metadata, options);
 
-    if (options.afterBuildModel)
-        options.afterBuildModel(model);
+    if (options.afterBuildModel) {
+        var p = options.afterBuildModel(model, metadata);
+        if (p && p.then)
+            await p;
+    }
 
     const nodes = model.toNodeArray();
    
@@ -86,17 +89,21 @@ function initEnumType(edmEnumType: EdmEnumType, declaration: cm.EnumDeclaration,
     declaration.comment = edmEnumType.getFullName();
 }
 
-function generateApiContext(model: cm.Model, metadata: ApiMetadata, options: GeneratorOptions): cm.InterfaceDeclaration {
+export function generateApiContext(model: cm.Model, metadata: ApiMetadata, options: GeneratorOptions): cm.InterfaceDeclaration {
     let baseClass = options.apiContextBase || API_CONTEXT_BASE_TYPE;
     let apiContextName = options.apiContextName || (metadata.containerName||"Odata")+"Context"
     const d = new cm.InterfaceDeclaration(apiContextName, baseClass);
 
-    let props = Object.keys(metadata.entitySets)
-        .map(name => { return { name, meta: metadata.entitySets[name] } });
+    let entitySets = Object.keys(metadata.entitySets)
+        .map(name => { return { name, meta: metadata.entitySets[name], isCol: true } });
+    let singletons = Object.keys(metadata.singletons)
+        .map(name => { return { name, meta: metadata.singletons[name], isCol: false } });
 
-    for (let p of props) {
+    for (let p of entitySets.concat(
+                    singletons)) 
+    {
         const propPath = [metadata.containerName, p.name].filter(_ => _).join(".");
-        let typeRef = getTypeReference(new EdmTypeReference(p.meta, false, true), metadata, model, options);
+        let typeRef = getTypeReference(new EdmTypeReference(p.meta, false, p.isCol), metadata, model, options);
         if (typeRef &&(
             isIncludeObject(propPath, options)
             || (typeof typeRef.type === "object" && !isExclude(propPath, options))
@@ -109,7 +116,7 @@ function generateApiContext(model: cm.Model, metadata: ApiMetadata, options: Gen
     return d;
 }
 
-function getTypeReference(edmRef: EdmTypeReference, metadata: ApiMetadata, model: cm.Model, options: GeneratorOptions) {
+export function getTypeReference(edmRef: EdmTypeReference, metadata: ApiMetadata, model: cm.Model, options: GeneratorOptions) {
     if (typeof edmRef.type == "string")
         return new cm.TypeReference(edmRef.type, edmRef.collection);
     var resType =
@@ -131,7 +138,7 @@ function generateOperations(model: cm.Model, metadata: ApiMetadata, options: Gen
         }
 }
 
-function generateOperation(operation: OperationMetadata, model: cm.Model, metadata: ApiMetadata, options: GeneratorOptions) {
+export function generateOperation(operation: OperationMetadata, model: cm.Model, metadata: ApiMetadata, options: GeneratorOptions) {
     let isSetBinded = false;
     let bindToModel: cm.InterfaceDeclaration;
     if (operation.bindingTo) {
@@ -176,7 +183,7 @@ function generateOperation(operation: OperationMetadata, model: cm.Model, metada
     }
 }
 
-function getOperTypeRef(operTypeRef: cm.TypeReference | undefined, setter: (tr: cm.TypeReference) => void, operation: OperationMetadata, model: cm.Model): cm.TypeReference {
+export function getOperTypeRef(operTypeRef: cm.TypeReference | undefined, setter: (tr: cm.TypeReference) => void, operation: OperationMetadata, model: cm.Model): cm.TypeReference {
     if (!operTypeRef) {
         const bindtoTypeName = (operation.bindingTo && operation.bindingTo.type.name) || model.contextDeclaration.name;
         const prefix = operation.bindingTo && operation.bindingTo.collection ? "EntitySet" : "";

@@ -6,7 +6,9 @@ import * as path from "path";
 import { createProgram, ModuleKind, ScriptTarget, Program, DiagnosticCategory } from "typescript";
 import fetch from "node-fetch";
 import { generate, GeneratorOptions } from "./generator";
-import { ApiMetadata } from "pailingual-odata/src/metadata";
+import { csdl } from "pailingual-odata";
+import { MetadataDocument } from "pailingual-odata/src/csdl";
+import { loadavg } from "os";
 
 if (typeof window === 'undefined') {
     require('jsdom-global')();
@@ -62,7 +64,8 @@ async function run() {
         else
             afterBuild = await getAfterBuildFunc();
 
-    const md =await loadMetadata()
+    const md = await loadMetadata()
+    csdl.setParents(md);
     await generateModel(md);
 }
 
@@ -74,36 +77,48 @@ function error(error: string | Error, exitCode?: number) {
         process.exit(exitCode);
 }
 
-function loadMetadata(): Promise<ApiMetadata> {
+function loadMetadata(): Promise<csdl.MetadataDocument> {
     return urlOrPath.endsWith("$metadata")
         ? loadMetadataFromUrl(urlOrPath)
         : loadMetadataFromFile(urlOrPath);
 }
 
-function loadMetadataFromUrl(url: string): Promise<ApiMetadata> {
+async function loadMetadataFromUrl(url: string): Promise<csdl.MetadataDocument> {
     const apiRoot = url.replace(/\\\$metadata$/, "");
-    return ApiMetadata.loadAsync(apiRoot, { fetch });
+    const response = await fetch(apiRoot);
+    if (!response.ok)
+        throw `Load metadata failed. Server response ${response.status}`;
+    const data = await response.text();
+    return parseMetadata(data);
 }
 
-async function loadMetadataFromFile(path: string): Promise<ApiMetadata> {
-    if (!fs.existsSync(path))
-        error(`Error: File '${path}' not found`, 1);
+async function loadMetadataFromFile(filePath: string): Promise<csdl.MetadataDocument> {
+    if (!fs.existsSync(filePath))
+        error(`Error: File '${filePath}' not found`, 1);
     try {
         var data: string = await new Promise(
-            (resolve, reject) => fs.readFile(path, "utf8", (e, d) => {
+            (resolve, reject) => fs.readFile(filePath, "utf8", (e, d) => {
                 if (e) reject(e);
                 resolve(d);
             }));
-
-        var metadata = ApiMetadata.loadFromXml("", data);
-        return Promise.resolve(metadata);
+        return parseMetadata(data)
     }
     catch (e) {
         error(e.message, 2);
     }
 }
 
-function generateModel(metadata: ApiMetadata) {
+function parseMetadata(data: string): csdl.MetadataDocument {
+    if (data[0] == "{")
+        return JSON.parse(data) as MetadataDocument;
+    else if (data[0] == "<") {
+        const loader = require("pailingual-odata-csdl-xml").loadFromXml;
+        return loader(data);
+    }
+    throw "Unable parse metadata";
+}
+
+function generateModel(metadata: csdl.MetadataDocument) {
     var options: GeneratorOptions = {
         imports: cli.imports,
         include: cli.include,

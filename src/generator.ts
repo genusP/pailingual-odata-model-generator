@@ -1,6 +1,6 @@
 import * as ts from "typescript";
 import * as cm from "./codeModel";
-import { ApiMetadata, EdmEnumType, EdmEntityType, EdmTypeReference, EdmComplexType, OperationMetadata } from "pailingual-odata/src/metadata";
+import * as csdl from "pailingual-odata/src/csdl";
 
 const API_CONTEXT_BASE_TYPE = "IApiContextBase";
 
@@ -10,10 +10,10 @@ export type GeneratorOptions = {
     exclude?: (string | RegExp)[],
     apiContextName?: string,
     apiContextBase?: string,
-    afterBuildModel?: (model: cm.Model, metadata?: ApiMetadata) => Promise<void>
+    afterBuildModel?: (model: cm.Model, metadata?: csdl.MetadataDocument) => Promise<void>
 }
 
-export async function generate(metadata: ApiMetadata, options: GeneratorOptions = {}) {
+export async function generate(metadata: csdl.MetadataDocument, options: GeneratorOptions = {}) {
     //  const nodes: ts.Node[] = [];
     const model = new cm.Model();
     model.imports.push("import { ApiContext, IApiContextBase, IComplexBase, IEntityBase } from \"pailingual-odata\"");
@@ -31,7 +31,7 @@ export async function generate(metadata: ApiMetadata, options: GeneratorOptions 
     }
 
     const nodes = model.toNodeArray();
-   
+
     const resultFile = ts.createSourceFile("", "", ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
 
     var printer = ts.createPrinter({});
@@ -39,8 +39,8 @@ export async function generate(metadata: ApiMetadata, options: GeneratorOptions 
     return code;
 }
 
-function isIncludeObject(edmObj: EdmEntityType | EdmComplexType | EdmEnumType | OperationMetadata | string, options: GeneratorOptions) {
-    const objFullName = typeof edmObj === "string" ? edmObj : edmObj.getFullName();
+function isIncludeObject(edmObj: csdl.EntityType | csdl.ComplexType | csdl.EnumType | csdl.Action | csdl.Function | string, options: GeneratorOptions) {
+    const objFullName = typeof edmObj === "string" ? edmObj : csdl.getName(edmObj, "full");
     return !(
         (options.include && !options.include.some(p => isMatch(objFullName, p)))
         || isExclude(objFullName, options)
@@ -53,99 +53,99 @@ function isExclude(path: string, options: GeneratorOptions) {
 
 function isMatch(value: string, pattern: string | RegExp): boolean {
     const pattern2 = pattern instanceof RegExp ? pattern : new RegExp(`^${pattern.replace(".", "\.")}$`, "i");
-    return value.match(pattern2)!= null;
+    return value.match(pattern2) != null;
 }
 
-function initEntityType(edmEntityType: EdmEntityType, declaration:cm.InterfaceDeclaration, metadata: ApiMetadata, model: cm.Model, options: GeneratorOptions): cm.InterfaceDeclaration {
+function initEntityType(type: csdl.EntityType | csdl.ComplexType, declaration: cm.InterfaceDeclaration, model: cm.Model, options: GeneratorOptions): cm.InterfaceDeclaration {
 
-    const internalAddProps = function (props: Record<string, EdmTypeReference>) {
-        for (const propName of Object.keys(props)) {
-            const propPath = [edmEntityType.getFullName(), propName].join(".");
-            if (isIncludeObject(propPath, options)) {
-                const edmTypeReference = props[propName];
-                const typeReference = getTypeReference(edmTypeReference, metadata, model, options);
+    for (var propName of Object.getOwnPropertyNames(type)) {
+        if (propName[0] !== "$") {
+            const property = csdl.getProperty(propName, type);
+            if (property
+                && isIncludeObject(csdl.getName(property, "full"), options)) {
+                const typeReference = getTypeReference(property.$Type, property, property.$Collection, model, options);
                 if (typeReference) {
-                    if (props === edmEntityType.navProperties)
+                    if (csdl.isNavigationProperty(property))
                         declaration.addNavProperty(propName, typeReference);
-                    else
-                        declaration.addProperty(propName, typeReference, edmTypeReference.nullable);
+                    else if (csdl.isProperty(property))
+                        declaration.addProperty(propName, typeReference, property.$Nullable);
                 }
             }
         }
     }
 
-    edmEntityType.properties && internalAddProps(edmEntityType.properties);
-    edmEntityType.navProperties && internalAddProps(edmEntityType.navProperties);
-
-    declaration.comment = edmEntityType.getFullName();
+    declaration.comment = csdl.getName(type, "full");
 
     return declaration;
 }
 
-function initEnumType(edmEnumType: EdmEnumType, declaration: cm.EnumDeclaration, options: GeneratorOptions)
-{
-    for (const memberName of Object.keys(edmEnumType.members))
-        declaration.addMember(memberName, edmEnumType.members[memberName]);
-    declaration.comment = edmEnumType.getFullName();
+function initEnumType(edmEnumType: csdl.EnumType, declaration: cm.EnumDeclaration, options: GeneratorOptions) {
+    for (const memberName of Object.keys(edmEnumType))
+        if (memberName && memberName[0] !== "$")
+            declaration.addMember(memberName, edmEnumType[memberName] as any);
+    declaration.comment = csdl.getName(edmEnumType, "full");
 }
 
-export function generateApiContext(model: cm.Model, metadata: ApiMetadata, options: GeneratorOptions): cm.InterfaceDeclaration {
+export function generateApiContext(model: cm.Model, metadata: csdl.MetadataDocument, options: GeneratorOptions): cm.InterfaceDeclaration {
+    const container = csdl.getEntityContainer(metadata);
+    const containerName = csdl.getName(container);
     let baseClass = options.apiContextBase || API_CONTEXT_BASE_TYPE;
-    let apiContextName = options.apiContextName || (metadata.containerName||"Odata")+"Context"
+    let apiContextName = options.apiContextName || (containerName || "Odata") + "Context"
     const d = new cm.InterfaceDeclaration(apiContextName, baseClass);
 
-    let entitySets = Object.keys(metadata.entitySets)
-        .map(name => { return { name, meta: metadata.entitySets[name], isCol: true } });
-    let singletons = Object.keys(metadata.singletons)
-        .map(name => { return { name, meta: metadata.singletons[name], isCol: false } });
-
-    for (let p of entitySets.concat(
-                    singletons)) 
-    {
-        const propPath = [metadata.containerName, p.name].filter(_ => _).join(".");
-        let typeRef = getTypeReference(new EdmTypeReference(p.meta, false, p.isCol), metadata, model, options);
-        if (typeRef &&(
-            isIncludeObject(propPath, options)
-            || (typeof typeRef.type === "object" && !isExclude(propPath, options))
+    for (let p of Object.getOwnPropertyNames(container)) {
+        const val = container[p]
+        if (csdl.isEntitySet(val) || csdl.isSingleton(val)) {
+            const propPath = csdl.getName(val, "full");
+            let typeRef = getTypeReference(val.$Type, val, val.$Kind == "EntitySet", model, options);
+            if (typeRef && (
+                isIncludeObject(propPath, options)
+                || (typeof typeRef.type === "object" && !isExclude(propPath, options))
             )
-        ) 
-            d.addNavProperty(p.name, typeRef)
-                .comment = propPath;
-    }    
+            )
+                d.addNavProperty(csdl.getName(val), typeRef)
+                    .comment = propPath;
+        }
+    }
 
     return d;
 }
 
-export function getTypeReference(edmRef: EdmTypeReference, metadata: ApiMetadata, model: cm.Model, options: GeneratorOptions) {
-    if (typeof edmRef.type == "string")
-        return new cm.TypeReference(edmRef.type, edmRef.collection);
+export function getTypeReference(type: string, context: any, collection: boolean | undefined, model: cm.Model, options: GeneratorOptions) {
+    const typeDef = csdl.getType(type, context);
+    if (csdl.isPrimitiveType(typeDef))
+        return new cm.TypeReference(typeDef, collection);
+    const fullName = csdl.getName(typeDef, "full");
+    const name = csdl.getName(typeDef);
     var resType =
-        !isIncludeObject(edmRef.type, options) ? edmRef.type.name :
-            edmRef.type instanceof EdmEntityType
-                ? model.getOrAddType(edmRef.type, (t, et) => initEntityType(t, et, metadata, model, options)) :
-            edmRef.type instanceof EdmEnumType
-                ? model.getOrAddType(edmRef.type, (t, ed) => initEnumType(t, ed, options)) :
-            undefined;
+        !isIncludeObject(fullName, options) ? name :
+            csdl.isEntityType(typeDef) || csdl.isComplexType(typeDef)
+                ? model.getOrAddType(typeDef, (t, et) => initEntityType(t, et, model, options)) :
+                csdl.isEnumType(typeDef)
+                    ? model.getOrAddType(typeDef, (t, ed) => initEnumType(t, ed, options)) :
+                    undefined;
     if (resType)
-        return new cm.TypeReference(resType, edmRef.collection);
+        return new cm.TypeReference(resType, collection);
 }
 
-function generateOperations(model: cm.Model, metadata: ApiMetadata, options: GeneratorOptions) {
-    for (let ns of Object.keys(metadata.namespaces))
-        for (let operation of metadata.namespaces[ns].operations) {
-            if (isIncludeObject(operation, options))
-                generateOperation(operation, model, metadata, options);
-        }
+function generateOperations(model: cm.Model, metadata: csdl.MetadataDocument, options: GeneratorOptions) {
+    for (let operation of csdl.getOperations(metadata)) {
+        if (isIncludeObject(operation.name, options))
+            for (let overload of operation.metadata)
+                generateOperation(overload, model, options);
+    }
 }
 
-export function generateOperation(operation: OperationMetadata, model: cm.Model, metadata: ApiMetadata, options: GeneratorOptions) {
+export function generateOperation(operation: csdl.ActionOverload | csdl.FunctionOverload, model: cm.Model, options: GeneratorOptions) {
     let isSetBinded = false;
     let bindToModel: cm.InterfaceDeclaration;
-    if (operation.bindingTo) {
-        if (!isIncludeObject(operation.bindingTo.type, options))
+    if (operation.$IsBound) {
+        const bindingParameter = operation.$Parameter[0];
+        const boundTo = csdl.getType(bindingParameter.$Type, operation) as csdl.EntityType;
+        if (!isIncludeObject(boundTo, options))
             return;
-        isSetBinded = operation.bindingTo.collection == true;
-        bindToModel = model.getOrAddType(operation.bindingTo.type, (t, id) => initEntityType(t, id, metadata, model, options));
+        isSetBinded = bindingParameter.$Collection == true;
+        bindToModel = model.getOrAddType(boundTo, (t, id) => initEntityType(t, id, model, options));
     }
     else
         bindToModel = model.contextDeclaration;
@@ -155,39 +155,45 @@ export function generateOperation(operation: OperationMetadata, model: cm.Model,
 
         let operTypeRef: cm.TypeReference;
         if (isSetBinded) {
-            if (operation.isAction) 
+            if (csdl.isActionOverload(operation))
                 operTypeRef = getOperTypeRef(bindToModel.operationsRef.entitysetActions, tr => bindToModel.operationsRef.entitysetActions = tr, operation, model);
             else
                 operTypeRef = getOperTypeRef(bindToModel.operationsRef.entitysetFunctions, tr => bindToModel.operationsRef.entitysetFunctions = tr, operation, model);
         }
         else {
-            if (operation.isAction)
+            if (csdl.isActionOverload(operation))
                 operTypeRef = getOperTypeRef(bindToModel.operationsRef.actions, tr => bindToModel.operationsRef.actions = tr, operation, model);
             else
                 operTypeRef = getOperTypeRef(bindToModel.operationsRef.functions, tr => bindToModel.operationsRef.functions = tr, operation, model);
         }
 
         let interfaceDec = operTypeRef.type as cm.OperationsInterfaceDeclaration;
-        let returnType = operation.returnType && getTypeReference(operation.returnType, metadata, model, options);
-        let params = (operation.parameters || [])
+        let returnType = operation.$ReturnType && getTypeReference(operation.$ReturnType.$Type, operation, operation.$ReturnType.$Collection, model, options);
+        let params = (operation.$Parameter || [])
             .map(p =>
                 new cm.MethodParameter(
-                    p.name,
-                    getTypeReference(p.type, metadata, model, options),
-                    p.type.nullable
+                    p.$Name,
+                    getTypeReference(p.$Type, operation, p.$Collection, model, options),
+                    p.$Nullable
                 )
             );
-        const methodDeclaration = new cm.MethodDeclaration(operation.name, returnType, params, operation.getFullName());
+        const methodDeclaration = new cm.MethodDeclaration(
+            csdl.getName((operation as any).$$parent),
+            returnType,
+            params,
+            csdl.getName((operation as any).$$parent, "full"));
 
         interfaceDec.methods.push(methodDeclaration);
     }
 }
 
-export function getOperTypeRef(operTypeRef: cm.TypeReference | undefined, setter: (tr: cm.TypeReference) => void, operation: OperationMetadata, model: cm.Model): cm.TypeReference {
+export function getOperTypeRef(operTypeRef: cm.TypeReference | undefined, setter: (tr: cm.TypeReference) => void, operation: csdl.ActionOverload | csdl.FunctionOverload, model: cm.Model): cm.TypeReference {
     if (!operTypeRef) {
-        const bindtoTypeName = (operation.bindingTo && operation.bindingTo.type.name) || model.contextDeclaration.name;
-        const prefix = operation.bindingTo && operation.bindingTo.collection ? "EntitySet" : "";
-        const sufix = operation.isAction ? "Actions" : "Functions";
+        const bindingParameter = operation.$IsBound && operation.$Parameter[0];
+        const bindingTo: any = bindingParameter && csdl.getType(bindingParameter.$Type, operation);
+        const bindtoTypeName = (bindingTo && csdl.getName(bindingTo)) || model.contextDeclaration.name;
+        const prefix = bindingParameter && bindingParameter.$Collection ? "EntitySet" : "";
+        const sufix = csdl.isActionOverload(operation) ? "Actions" : "Functions";
         operTypeRef = new cm.TypeReference(
             new cm.OperationsInterfaceDeclaration(
                 "_" + bindtoTypeName + prefix + sufix,

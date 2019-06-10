@@ -1,5 +1,5 @@
 import * as ts from "typescript";
-import { EdmComplexType, EdmEntityType, EdmEnumType, EdmTypes } from "pailingual-odata/src/metadata";
+import { csdl } from "pailingual-odata";
 
 const ENTITY_BASE_TYPE = "IEntityBase";
 const COMPLEX_BASE_TYPE = "IComplexBase";
@@ -136,7 +136,7 @@ export class PropertyDeclaration {
 
 export class TypeReference {
     constructor(
-        public type: TypeDeclaration | EdmTypes | string,
+        public type: TypeDeclaration | csdl.PrimitiveType | string,
 		public isArray = false)
     {
     }
@@ -252,18 +252,18 @@ export class Model {
 
     private _typeMap = new Map<string, TypeDeclaration>();
 
-    getOrAddType<T extends EdmEntityType | EdmComplexType>(type: T, init: (edmType: T, declaration: InterfaceDeclaration) => void): InterfaceDeclaration;
-    getOrAddType(type: EdmEnumType, init: (edmType: EdmEnumType, declaration:EnumDeclaration) => void): EnumDeclaration;
-    getOrAddType(edmType: EdmEntityType | EdmComplexType | EdmEnumType, init: (edmType, declaration) => void ): InterfaceDeclaration | EnumDeclaration
+    getOrAddType<T extends csdl.EntityType | csdl.ComplexType>(type: T, init: (edmType: T, declaration: InterfaceDeclaration) => void): InterfaceDeclaration;
+    getOrAddType(type: csdl.EnumType, init: (edmType: csdl.EnumType, declaration:EnumDeclaration) => void): EnumDeclaration;
+    getOrAddType(edmType: csdl.EntityType | csdl.ComplexType | csdl.EnumType, init: (edmType, declaration) => void ): InterfaceDeclaration | EnumDeclaration
     {
-        var fullName = edmType.getFullName();
+        const fullName = csdl.getName(edmType, "full");
         if (this._typeMap.has(fullName))
             return this._typeMap.get(fullName) as any;
 
-        const declaration =
-            edmType instanceof EdmComplexType ? new InterfaceDeclaration(edmType.name, COMPLEX_BASE_TYPE) :
-                edmType instanceof EdmEntityType ? new InterfaceDeclaration(edmType.name, ENTITY_BASE_TYPE) :
-                    new EnumDeclaration(edmType.name, true);
+        const name = csdl.getName(edmType);
+        const declaration = csdl.isEnumType(edmType)
+            ? new EnumDeclaration(name, true)
+            : new InterfaceDeclaration(name, csdl.isEntityType(edmType) ? ENTITY_BASE_TYPE : COMPLEX_BASE_TYPE);
 
         this._typeMap.set(fullName, declaration);
         init && init(edmType, declaration);
@@ -307,15 +307,15 @@ export class Model {
 }
 
 const edmTypeMap = {
-    [EdmTypes.Boolean]: "boolean",
-    [EdmTypes.Date]: "Date",
-    [EdmTypes.DateTimeOffset]: "Date",
-    [EdmTypes.Decimal]: "number",
-    [EdmTypes.Double]: "number",
-    [EdmTypes.Guid]: "string",
-    [EdmTypes.Int16]: "number",
-    [EdmTypes.Int32]: "number",
-    [EdmTypes.Single]: "boolean",
-    [EdmTypes.String]: "string",
-    [EdmTypes.TimeOfDay]: "Date"
+    [csdl.PrimitiveType.Boolean]: "boolean",
+    [csdl.PrimitiveType.Date]: "Date",
+    [csdl.PrimitiveType.DateTimeOffset]: "Date",
+    [csdl.PrimitiveType.Decimal]: "number",
+    [csdl.PrimitiveType.Double]: "number",
+    [csdl.PrimitiveType.Guid]: "string",
+    [csdl.PrimitiveType.Int16]: "number",
+    [csdl.PrimitiveType.Int32]: "number",
+    [csdl.PrimitiveType.Single]: "boolean",
+    [csdl.PrimitiveType.String]: "string",
+    [csdl.PrimitiveType.TimeOfDay]: "Date"
 }

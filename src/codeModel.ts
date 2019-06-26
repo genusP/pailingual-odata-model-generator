@@ -19,6 +19,9 @@ export abstract class TypeDeclaration {
 }
 
 export class InterfaceDeclaration extends TypeDeclaration {
+
+    key: string[];
+
     constructor(
         name: string,
         public baseClass: InterfaceDeclaration | string,
@@ -52,7 +55,15 @@ export class InterfaceDeclaration extends TypeDeclaration {
                     ts.SyntaxKind.ExtendsKeyword,
                     [ts.createExpressionWithTypeArguments(undefined, ts.createIdentifier(typeof this.baseClass == "string" ? this.baseClass : this.baseClass.name))])]
             : undefined;
-
+        let keyDef: ts.TypeElement[];
+        if (this.key) {
+            const keyType = this.key.length == 1
+                ? ts.createLiteralTypeNode(ts.createLiteral(this.key[0]))
+                : ts.createUnionTypeNode(this.key.map(k => ts.createLiteralTypeNode(ts.createLiteral(k))));
+            keyDef = [ts.createProperty(undefined, undefined, "$$Keys", undefined, keyType, undefined) as any];
+        }
+        else
+            keyDef = [];
         let res: ts.Node = ts.createInterfaceDeclaration(
             undefined,
             this.getModifiers(),
@@ -60,6 +71,7 @@ export class InterfaceDeclaration extends TypeDeclaration {
             undefined,
             heritageClause,
             [
+                ...keyDef,
                 ...this.properties.map((m, i) => this.commentFirst(m.toTypeElement(), i, "Properties")),
                 ...this.navigation.map((n, i) => this.commentFirst(n.toTypeElement(), i, "Navigation properties")),
                 ...(this.operationsRef ? this.operationsRef.toTypeElements() : [])

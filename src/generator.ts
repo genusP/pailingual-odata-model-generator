@@ -57,8 +57,12 @@ function isMatch(value: string, pattern: string | RegExp): boolean {
 }
 
 function initEntityType(type: csdl.EntityType | csdl.ComplexType, declaration: cm.InterfaceDeclaration, model: cm.Model, options: GeneratorOptions): cm.InterfaceDeclaration {
-
     for (var propName of Object.getOwnPropertyNames(type)) {
+        if (propName == "$Key") {
+            const v = type[propName] as csdl.KeyItem[];
+            declaration.key = v.map(k => typeof k === "string" ? k : Object.getOwnPropertyNames(k)[0]);
+
+        }
         if (propName[0] !== "$") {
             const property = csdl.getProperty(propName, type);
             if (property

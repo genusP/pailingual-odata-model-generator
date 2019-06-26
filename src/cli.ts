@@ -104,7 +104,7 @@ async function loadMetadataFromFile(filePath: string): Promise<csdl.MetadataDocu
         return parseMetadata(data)
     }
     catch (e) {
-        error(e.message, 2);
+        error(e, 2);
     }
 }
 

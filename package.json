@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "commander": "2.20.0",
-    "jsdom": "^14.0.0",
+    "jsdom": "^16.5.0",
     "jsdom-global": "^3.0.2",
     "node-fetch": "^2.3.0",
     "pailingual-odata": "^1.0.0-rc.3",
